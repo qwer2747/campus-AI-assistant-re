@@ -1,0 +1,45 @@
+# ===== 数据库文件 =====
+*.db
+*.sqlite
+*.sqlite3
+
+# ===== 向量数据库 =====
+chroma_db/
+
+# ===== Python 缓存 =====
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+
+# ===== 本地配置（密钥） =====
+.env
+*.local
+secrets.toml
+.streamlit/secrets.toml
+
+# ===== 日志和临时文件 =====
+*.log
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# ===== IDE 配置 =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== 项目临时文件 =====
+feedback_log.csv
+unknown_questions.txt
+user_profiles.json
+question_stats.json
+
+# ===== 虚拟环境 =====
+venv/
+env/
+.venv/
