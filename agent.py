@@ -222,9 +222,12 @@ def run_agent(
             ...
         ]
     """
-    api_key = st.secrets.get("DEEPSEEK_API_KEY", "")
-    if not api_key:
-        return "❌ API密钥未配置，请在 secrets.toml 中设置 DEEPSEEK_API_KEY", []
+    try:
+        api_key = st.secrets["DEEPSEEK_API_KEY"]
+    except:
+        api_key = ""
+        if not api_key:
+            return "❌ API密钥未配置，请在 secrets.toml 中设置 DEEPSEEK_API_KEY", []
     
     # ---- 构建消息 ----
     system_content = REACT_SYSTEM_PROMPT.format(display_name=display_name)
