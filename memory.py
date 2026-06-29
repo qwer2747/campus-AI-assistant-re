@@ -18,7 +18,7 @@ def _hash(password: str) -> str:
 
 def register_user(username: str, password: str, display_name: str = "") -> tuple:
     sb = get_supabase()
-    res = sb.table("users").select("id").eq("username", username).execute()
+    res = sb.table("users").select("user_id").eq("username", username).execute()
     if res.data:
         return False, "用户名已存在", None
     sb.table("users").insert({
@@ -67,7 +67,7 @@ def clear_history(user_id: int):
 # ==================== 用户画像 ====================
 def save_user_fact(user_id: int, fact: str):
     sb = get_supabase()
-    res = sb.table("user_facts").select("id")\
+    res = sb.table("user_facts").select("user_id")\
         .eq("user_id", user_id).eq("fact", fact).execute()
     if not res.data:
         sb.table("user_facts").insert({
@@ -95,7 +95,7 @@ def delete_user_fact(user_id: int, fact: str):
 def get_chat_stats(user_id: int) -> dict:
     sb = get_supabase()
     res = sb.table("chat_history")\
-        .select("id")\
+        .select("user_id")\
         .eq("user_id", user_id)\
         .eq("role", "user")\
         .execute()
