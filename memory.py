@@ -38,7 +38,7 @@ def login_user(username: str, password: str) -> tuple:
         return False, None, None
     user = res.data[0]
     display_name = user.get("display_name") or username
-    return True, user["id"], display_name
+    return True, user["user_id"], display_name
 
 # ==================== 对话历史 ====================
 def save_message(user_id: int, role: str, content: str, tool_calls_log=None):
