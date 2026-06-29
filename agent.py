@@ -375,7 +375,7 @@ def _extract_answer(content: str) -> str:
 
 # ==================== 知识库在线学习 ====================
 def learn_new_knowledge(question: str, correct_answer: str):
-    _, collection = _load_resources()
+    collection = _load_resources()
     content  = f"问题：{question}\n答案：{correct_answer}（用户补充）"
     doc_id   = f"qa_learned_{int(time.time())}"
     collection.add(
