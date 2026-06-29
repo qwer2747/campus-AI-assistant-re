@@ -4,7 +4,6 @@ ReAct Agent：Reasoning + Acting
 显式捕获每一步 Thought → Action → Observation → Answer
 """
 import os
-os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 
 import json
 import math
@@ -14,7 +13,6 @@ import pandas as pd
 import chromadb
 import streamlit as st
 from datetime import datetime
-from sentence_transformers import SentenceTransformer
 
 from memory import save_user_fact, get_user_facts
 
@@ -27,12 +25,12 @@ MAX_TOOL_ROUNDS  = 6
 TEMPERATURE      = 0.3
 
 # ==================== 模型加载 ====================
-@st.cache_resource(show_spinner="⚙️ 正在加载AI模型...")
+import hashlib
+
+@st.cache_resource(show_spinner="⚙️ 正在加载知识库...")
 def _load_resources():
-    embed_model = SentenceTransformer(EMBEDDING_MODEL)
     chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
     kb_collection = chroma_client.get_or_create_collection(name="campus_qa")
-    
     if kb_collection.count() == 0 and os.path.exists(CSV_PATH):
         try:
             df = pd.read_csv(CSV_PATH, encoding='utf-8-sig')
@@ -40,18 +38,22 @@ def _load_resources():
             df = pd.read_csv(CSV_PATH, encoding='gbk')
         docs = [f"问题：{r['question']}\n答案：{r['answer']}" for _, r in df.iterrows()]
         ids  = [f"qa_{i}" for i in range(len(docs))]
-        embs = embed_model.encode(docs, normalize_embeddings=True).tolist()
+        embs = _embed(docs)
         kb_collection.add(documents=docs, embeddings=embs, ids=ids)
-    
-    return embed_model, kb_collection
+    return kb_collection
 
-# ==================== 工具函数（不变）====================
 def _embed(texts):
-    model, _ = _load_resources()
-    return model.encode(texts, normalize_embeddings=True).tolist()
-
+    result = []
+    for text in texts:
+        vec = []
+        for i in range(384):
+            h = int(hashlib.md5(f"{text}{i}".encode()).hexdigest(), 16)
+            vec.append((h % 10000) / 10000.0 - 0.5)
+        result.append(vec)
+    return result
+    
 def tool_search_knowledge(query: str, k: int = 5) -> str:
-    _, collection = _load_resources()
+    collection = _load_resources()
     results = collection.query(query_embeddings=_embed([query]), n_results=k)
     docs = results['documents'][0] if results['documents'] else []
     if not docs:
