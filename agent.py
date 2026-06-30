@@ -25,37 +25,38 @@ MAX_TOOL_ROUNDS  = 6
 TEMPERATURE      = 0.3
 
 # ==================== 模型加载 ====================
+from sentence_transformers import SentenceTransformer
 import hashlib
 
-@st.cache_resource(show_spinner="⚙️ 正在加载知识库...")
+@st.cache_resource(show_spinner="⚙️ 正在加载AI模型...")
 def _load_resources():
+    model = SentenceTransformer('BAAI/bge-small-zh')
     chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
     kb_collection = chroma_client.get_or_create_collection(name="campus_qa")
+    
     if kb_collection.count() == 0 and os.path.exists(CSV_PATH):
         try:
             df = pd.read_csv(CSV_PATH, encoding='utf-8-sig')
         except Exception:
             df = pd.read_csv(CSV_PATH, encoding='gbk')
         docs = [f"问题：{r['question']}\n答案：{r['answer']}" for _, r in df.iterrows()]
-        ids  = [f"qa_{i}" for i in range(len(docs))]
-        embs = _embed(docs)
+        ids = [f"qa_{i}" for i in range(len(docs))]
+        embs = model.encode(docs, normalize_embeddings=True).tolist()
         kb_collection.add(documents=docs, embeddings=embs, ids=ids)
-    return kb_collection
+    
+    return model, kb_collection
 
 def _embed(texts):
-    result = []
-    for text in texts:
-        vec = []
-        for i in range(384):
-            h = int(hashlib.md5(f"{text}{i}".encode()).hexdigest(), 16)
-            vec.append((h % 10000) / 10000.0 - 0.5)
-        result.append(vec)
-    return result
+    """使用真正的嵌入模型进行向量化"""
+    model, _ = _load_resources()
+    if isinstance(texts, str):
+        texts = [texts]
+    return model.encode(texts, normalize_embeddings=True).tolist()
     
 def tool_search_knowledge(query: str, k: int = 5) -> str:
-    collection = _load_resources()
+    _, collection = _load_resources()  # 注意这里改成 _, collection
     results = collection.query(query_embeddings=_embed([query]), n_results=k)
-    docs = results['documents'][0] if results['documents'] else []
+    docs = results['documents'][0] if results['documents'] else []  # 改成 [0] 不是 ['0']
     if not docs:
         return "📭 知识库中暂未找到相关资料。"
     return "\n\n".join([f"[资料{i+1}] {doc}" for i, doc in enumerate(docs)])
@@ -375,12 +376,13 @@ def _extract_answer(content: str) -> str:
 
 # ==================== 知识库在线学习 ====================
 def learn_new_knowledge(question: str, correct_answer: str):
-    collection = _load_resources()
-    content  = f"问题：{question}\n答案：{correct_answer}（用户补充）"
-    doc_id   = f"qa_learned_{int(time.time())}"
+    _, collection = _load_resources()  # 只取 collection
+    content = f"问题：{question}\n答案：{correct_answer}（用户补充）"
+    doc_id = f"qa_learned_{int(time.time())}"
+    embedding = _embed([content])  # 复用 _embed 函数
     collection.add(
         documents=[content],
-        embeddings=_embed([content]),
+        embeddings=embedding,
         ids=[doc_id]
     )
     print(f"✅ 纠错学习：{question[:30]}...")
