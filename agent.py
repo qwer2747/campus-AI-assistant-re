@@ -30,11 +30,33 @@ def _load_model():
     """只负责加载嵌入模型，不涉及知识库"""
     return SentenceTransformer(EMBEDDING_MODEL)
 
-# ==================== 知识库加载（只读，不构建）====================
+# ==================== 知识库加载（自动从 CSV 构建）====================
 def _load_collection():
-    """只负责连接知识库，不负责构建"""
+    """加载知识库，如果为空则自动从 CSV 构建"""
+    print("📚 正在连接知识库...")
     chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
     collection = chroma_client.get_or_create_collection(name="campus_qa")
+    
+    print(f"📊 当前记录数: {collection.count()}")
+    
+    if collection.count() == 0 and os.path.exists(CSV_PATH):
+        print("📦 知识库为空，正在从 CSV 自动构建...")
+        
+        # 直接加载模型（不通过 _embed 函数）
+        model = SentenceTransformer(EMBEDDING_MODEL)
+        
+        try:
+            df = pd.read_csv(CSV_PATH, encoding='utf-8-sig')
+        except Exception:
+            df = pd.read_csv(CSV_PATH, encoding='gbk')
+        
+        documents = [f"问题：{r['question']}\n答案：{r['answer']}" for _, r in df.iterrows()]
+        ids = [f"qa_{i}" for i in range(len(documents))]
+        embeddings = model.encode(documents, normalize_embeddings=True).tolist()
+        
+        collection.add(documents=documents, embeddings=embeddings, ids=ids)
+        print(f"✅ 构建完成，共 {len(documents)} 条数据")
+    
     return collection
 
 # ==================== 向量化函数 ====================
@@ -49,9 +71,8 @@ def _embed(texts):
 def tool_search_knowledge(query: str, k: int = 5) -> str:
     collection = _load_collection()
     
-    # 检查知识库是否为空
     if collection.count() == 0:
-        return "📭 知识库为空，请先运行 数据-chroma.py 构建知识库。"
+        return "📭 知识库暂无数据，请确保 campus_qa.csv 文件存在。"
     
     results = collection.query(query_embeddings=_embed([query]), n_results=k)
     docs = results['documents'][0] if results['documents'] else []
@@ -60,9 +81,9 @@ def tool_search_knowledge(query: str, k: int = 5) -> str:
         return "📭 知识库中暂未找到相关资料。"
     return "\n\n".join([f"[资料{i+1}] {doc}" for i, doc in enumerate(docs)])
 
-# ==================== 时间工具（已修正时区）====================
+# ==================== 时间工具 ====================
 def tool_get_datetime() -> str:
-    now = datetime.now() + timedelta(hours=8)  # 北京时间
+    now = datetime.now() + timedelta(hours=8)
     weekdays = ['一', '二', '三', '四', '五', '六', '日']
     return (f"📅 当前时间：{now.strftime('%Y年%m月%d日 %H:%M:%S')}，"
             f"星期{weekdays[now.weekday()]}，第{now.isocalendar()[1]}周")
@@ -107,12 +128,10 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "search_knowledge",
-            "description": "搜索校园知识库。当你需要查询图书馆、食堂、宿舍、选课、校园卡等校园信息时，必须调用这个工具。",
+            "description": "搜索校园知识库。当用户问图书馆、食堂、宿舍、选课、校园卡、报到、学分等校园问题时，必须调用此工具。",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "搜索关键词，越具体越好"}
-                },
+                "properties": {"query": {"type": "string", "description": "搜索关键词"}},
                 "required": ["query"]
             }
         }
@@ -121,7 +140,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "get_datetime",
-            "description": "仅在用户明确询问当前时间、日期、星期、今天几号、现在几点时使用。",
+            "description": "仅在用户明确询问当前时间、日期、星期时使用。",
             "parameters": {"type": "object", "properties": {}}
         }
     },
@@ -129,12 +148,10 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "calculate",
-            "description": "数学计算，支持四则运算、幂运算、sqrt()、sin()、cos()、log()等",
+            "description": "数学计算",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "expression": {"type": "string", "description": "数学表达式"}
-                },
+                "properties": {"expression": {"type": "string"}},
                 "required": ["expression"]
             }
         }
@@ -143,12 +160,10 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "remember_fact",
-            "description": "记住用户告诉你的个人信息（专业、年级、兴趣、偏好等）",
+            "description": "记住用户告诉你的个人信息",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "fact": {"type": "string", "description": "要记住的事实"}
-                },
+                "properties": {"fact": {"type": "string"}},
                 "required": ["fact"]
             }
         }
@@ -157,7 +172,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "recall_facts",
-            "description": "回忆当前用户之前告诉过你的所有个人信息",
+            "description": "回忆当前用户的个人信息",
             "parameters": {"type": "object", "properties": {}}
         }
     }
@@ -166,26 +181,12 @@ TOOL_SCHEMAS = [
 # ==================== ReAct 系统提示 ====================
 REACT_SYSTEM_PROMPT = """你是校园新生助手「小慧」，帮助{display_name}解决校园生活问题。
 
-## ⚡ 你必须遵循 ReAct 推理框架
-
-每次行动前，必须写出你的 Thought（思考过程）。
-
-### 标准格式：
-**调用工具时：**
-Thought: [分析问题，说明为什么要用这个工具]
-Action: search_knowledge(query="关键词")
-
-**最终回答时：**
-Thought: [整理答案]
-Answer: [给用户的正式回答]
-
 ## 工具使用规则
 1. 校园相关问题 → 必须先调用 search_knowledge
 2. 时间问题 → 调用 get_datetime
-3. 个人信息 → 调用 remember_fact / recall_facts
+3. 用户说个人信息 → 调用 remember_fact
 
 ## 当前用户：{display_name}"""
-
 
 # ==================== ReAct Agent 主循环 ====================
 def run_agent(
@@ -207,20 +208,16 @@ def run_agent(
     messages.append({"role": "user", "content": user_message})
     
     react_steps = []
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
     
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}"
-    }
-    
-    for round_num in range(MAX_TOOL_ROUNDS):
+    for _ in range(MAX_TOOL_ROUNDS):
         payload = {
-            "model":       "deepseek-chat",
-            "messages":    messages,
-            "tools":       TOOL_SCHEMAS,
+            "model": "deepseek-chat",
+            "messages": messages,
+            "tools": TOOL_SCHEMAS,
             "tool_choice": "auto",
             "temperature": TEMPERATURE,
-            "max_tokens":  1500
+            "max_tokens": 1500
         }
         
         try:
@@ -231,81 +228,44 @@ def run_agent(
             return f"🌐 网络错误：{e}", react_steps
         
         if resp.status_code != 200:
-            return f"❌ API错误 {resp.status_code}：{resp.text[:200]}", react_steps
+            return f"❌ API错误 {resp.status_code}", react_steps
         
-        resp_json = resp.json()
-        choice = resp_json['choices'][0]
-        finish_reason = choice['finish_reason']
-        ai_message = choice['message']
-        
+        ai_message = resp.json()['choices'][0]['message']
         raw_content = ai_message.get("content") or ""
         thought = _extract_thought(raw_content)
         
         messages.append(ai_message)
         
-        if finish_reason == "stop" or not ai_message.get("tool_calls"):
+        if not ai_message.get("tool_calls"):
             final_answer = _extract_answer(raw_content)
-            if thought and react_steps:
-                react_steps[-1]["final_thought"] = thought
-            elif thought and not react_steps:
-                react_steps.append({
-                    "thought": thought,
-                    "action": None,
-                    "action_input": None,
-                    "observation": None,
-                })
             return final_answer, react_steps
         
         for tc in ai_message.get("tool_calls", []):
             tool_name = tc["function"]["name"]
             try:
                 tool_args = json.loads(tc["function"]["arguments"])
-            except json.JSONDecodeError:
+            except:
                 tool_args = {}
             
             observation = _dispatch_tool(tool_name, tool_args, user_id)
-            
-            react_steps.append({
-                "thought": thought,
-                "action": tool_name,
-                "action_input": tool_args,
-                "observation": observation,
-            })
-            
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc["id"],
-                "content": observation
-            })
+            react_steps.append({"thought": thought, "action": tool_name, "action_input": tool_args, "observation": observation})
+            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": observation})
     
     return "⚠️ 推理轮数超限，请换个方式提问。", react_steps
-
 
 def _extract_thought(content: str) -> str:
     if not content:
         return ""
-    content = content.strip()
     if "Thought:" in content:
-        thought_part = content.split("Thought:")[-1]
-        if "Answer:" in thought_part:
-            thought_part = thought_part.split("Answer:")[0]
-        return thought_part.strip()
-    if "Answer:" not in content:
-        return content.strip()
-    return ""
-
+        return content.split("Thought:")[-1].split("Answer:")[0].strip()
+    return content.strip()
 
 def _extract_answer(content: str) -> str:
     if not content:
         return "（无回复）"
     if "Answer:" in content:
         return content.split("Answer:")[-1].strip()
-    if content.startswith("Thought:"):
-        after_thought = content.replace("Thought:", "", 1).strip()
-        if len(after_thought) > 20:
-            return after_thought
     return content.strip()
-
 
 # ==================== 知识库在线学习 ====================
 def learn_new_knowledge(question: str, correct_answer: str):
@@ -313,9 +273,5 @@ def learn_new_knowledge(question: str, correct_answer: str):
     content = f"问题：{question}\n答案：{correct_answer}（用户补充）"
     doc_id = f"qa_learned_{int(time.time())}"
     embedding = _embed([content])
-    collection.add(
-        documents=[content],
-        embeddings=embedding,
-        ids=[doc_id]
-    )
+    collection.add(documents=[content], embeddings=embedding, ids=[doc_id])
     print(f"✅ 纠错学习：{question[:30]}...")
